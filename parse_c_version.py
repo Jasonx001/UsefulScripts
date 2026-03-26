@@ -7,6 +7,7 @@ Usage: python3 parse_c_version.py <path_to_c_source_file>
 
 import re
 import sys
+from datetime import datetime
 
 
 def parse_version(filepath: str) -> str:
@@ -58,7 +59,8 @@ def main():
 
     filepath = sys.argv[1]
     version = parse_version(filepath)
-    print(version)
+    date_str = datetime.now().strftime("%Y%m%d")
+    print(f"{version}_{date_str}")
 
 
 if __name__ == "__main__":
