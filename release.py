@@ -213,7 +213,7 @@ def zip_release(release_dir: Path) -> None:
     if not ZIP7.exists():
         abort(f"7-Zip not found at {ZIP7}")
 
-    zip_path = release_dir.with_suffix(".zip")
+    zip_path = release_dir.parent / (release_dir.name + ".zip")
     if zip_path.exists():
         zip_path.unlink()
 
