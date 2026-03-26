@@ -218,7 +218,12 @@ def zip_release(release_dir: Path) -> None:
         zip_path.unlink()
 
     log_info(f"Compressing  {release_dir}  ->  {zip_path}")
-    result = subprocess.run([str(ZIP7), "a", "-tzip", str(zip_path), str(release_dir)])
+    # Run 7-Zip from the parent so the archive root is just the folder name,
+    # not the full path (e.g. "Release\" not "utils\post_build_hd20\Release\").
+    result = subprocess.run(
+        [str(ZIP7), "a", "-tzip", str(zip_path.resolve()), release_dir.name],
+        cwd=str(release_dir.parent.resolve()),
+    )
     if result.returncode != 0:
         abort("7-Zip compression failed")
 
