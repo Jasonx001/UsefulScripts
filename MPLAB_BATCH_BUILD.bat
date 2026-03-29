@@ -67,7 +67,7 @@ echo *     Target: This script is written for batch building multiple configurat
 echo *********************************************************************************************************
 echo %CBlue%--Build Options-------------------------------------------------------------------------
 echo  c -- [CLEAN]   Clean all configurations
-echo  a -- [BUILD]   Build all configurations (parallel)
+echo  a -- [BUILD]   Build all configurations
 echo  r -- [RELEASE] Release all  ^(pack to zip^)
 echo  p -- [POSTB]   Post Build for all configurations
 echo  u -- [CONF]    Update Config ^(regenerate make files^)
@@ -144,68 +144,42 @@ goto End
 REM =========================================================
 :[Build]Build_All
 REM =========================================================
-REM Builds all configurations in parallel, then runs post-build sequentially.
-echo [BUILD] Starting parallel build for all %index% configuration(s)...
+echo [BUILD] Starting build for all %index% configuration(s)...
 set "T_START=%time: =0%"
 
-REM Clean stale flag files from previous runs
 for /l %%i in (1,1,%index%) do (
-    del /f /q "%LOGDIR%\ok_%%i.flag" "%LOGDIR%\fail_%%i.flag" 2>nul
-)
+    echo [BUILD] Start building for "!conf[%%i]!"...
 
-REM Regen check (sequential) then launch each build in background
-for /l %%i in (1,1,%index%) do (
     call :NeedRegen "!conf[%%i]!"
     if errorlevel 1 (
-        echo %CYellow%[UPDATE] Regenerating makefiles for !conf[%%i]!%CEnd%
+        echo %CYellow%[UPDATE] Makefiles for "!conf[%%i]!" need regeneration%CEnd%
         call "%MAKEFILE_GEN%" "%PROJECT_PATH%"@!conf[%%i]!
     ) else (
-        echo [SKIP] !conf[%%i]! makefiles are up-to-date
+        echo [SKIP] !conf[%%i]! is up-to-date
     )
-    echo [BUILD] Launching !conf[%%i]! ^(background^)...
-    call :LaunchBuild "!conf[%%i]!" %%i
-)
 
-REM Poll until every build has written its ok/fail flag
-echo [BUILD] Waiting for all builds to complete...
-:WaitAllBuilds
-set "ALL_DONE=1"
-for /l %%i in (1,1,%index%) do (
-    if not exist "%LOGDIR%\ok_%%i.flag" (
-        if not exist "%LOGDIR%\fail_%%i.flag" (
-            set "ALL_DONE=0"
-        )
+    make -C %MPLAB_PROJECT_NAME% CONF=!conf[%%i]! build -j%NUMBER_OF_PROCESSORS% ^
+        2>&1 | tee %LOGDIR%\build_!conf[%%i]!.log
+
+    if errorlevel 1 (
+        echo %CRed%[ERROR] Build failed for !conf[%%i]!%CEnd%
+        call :PrintElapsed "!T_START!" "Build all"
+        goto End
     )
-)
-if "!ALL_DONE!"=="0" (
-    timeout /t 3 /nobreak >nul
-    goto WaitAllBuilds
-)
 
-call :PrintElapsed "!T_START!" "Parallel build"
-
-REM Check results
-set "BUILD_FAILED=0"
-for /l %%i in (1,1,%index%) do (
-    if exist "%LOGDIR%\fail_%%i.flag" (
-        echo %CRed%[ERROR] Build failed for !conf[%%i]! -- see %LOGDIR%\build_!conf[%%i]!.log%CEnd%
-        set "BUILD_FAILED=1"
-    ) else (
-        echo %CGreen%[SUCCESS] Build completed for !conf[%%i]!%CEnd%
-    )
-)
-if "!BUILD_FAILED!"=="1" goto End
-
-REM Post-build runs sequentially after all builds complete
-for /l %%i in (1,1,%index%) do (
     echo [POST BUILD] !conf[%%i]!...
     CALL %POST_BUILD_DIR%\post_build.bat !conf[%%i]!
     if errorlevel 1 (
         echo %CRed%[ERROR] Post build failed for !conf[%%i]!%CEnd%
+        call :PrintElapsed "!T_START!" "Build all"
         goto End
     )
-    echo %CGreen%[SUCCESS] Post build completed for !conf[%%i]!%CEnd%
+
+    echo %CGreen%[SUCCESS] Successfully built !conf[%%i]!%CEnd%
+    echo =======================Build End=========================
 )
+
+call :PrintElapsed "!T_START!" "Build all"
 echo %CGreen%[SUCCESS] All configurations built successfully!%CEnd%
 goto End
 
@@ -291,18 +265,6 @@ goto End
 echo Press any key to continue...
 pause>nul
 goto Start
-
-
-REM =========================================================
-REM FUNCTION: LaunchBuild  %1=conf_name  %2=index
-REM Starts a background build; writes ok_N.flag or fail_N.flag on completion.
-REM =========================================================
-:LaunchBuild
-REM Each background build runs serially (-j1) so that N configs running
-REM simultaneously do not flood the system with N*PROCESSORS xc16-gcc
-REM processes, which causes "CreateProcess: No such file or directory".
-start "" cmd /c "make -C %MPLAB_PROJECT_NAME% CONF=%~1 build -j1 > %LOGDIR%\build_%~1.log 2>&1 && (echo done > %LOGDIR%\ok_%~2.flag) || (echo done > %LOGDIR%\fail_%~2.flag)"
-exit /b 0
 
 
 REM =========================================================
