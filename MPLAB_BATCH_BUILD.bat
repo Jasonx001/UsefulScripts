@@ -298,7 +298,10 @@ REM FUNCTION: LaunchBuild  %1=conf_name  %2=index
 REM Starts a background build; writes ok_N.flag or fail_N.flag on completion.
 REM =========================================================
 :LaunchBuild
-start "" cmd /c "make -C %MPLAB_PROJECT_NAME% CONF=%~1 build -j%NUMBER_OF_PROCESSORS% > %LOGDIR%\build_%~1.log 2>&1 && (echo done > %LOGDIR%\ok_%~2.flag) || (echo done > %LOGDIR%\fail_%~2.flag)"
+REM Each background build runs serially (-j1) so that N configs running
+REM simultaneously do not flood the system with N*PROCESSORS xc16-gcc
+REM processes, which causes "CreateProcess: No such file or directory".
+start "" cmd /c "make -C %MPLAB_PROJECT_NAME% CONF=%~1 build -j1 > %LOGDIR%\build_%~1.log 2>&1 && (echo done > %LOGDIR%\ok_%~2.flag) || (echo done > %LOGDIR%\fail_%~2.flag)"
 exit /b 0
 
 
