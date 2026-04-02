@@ -3,30 +3,41 @@
  *
  * Custom linker script for a dsPIC33CK512MP606 bootloader project.
  *
- * Memory map overview
- * -------------------
- *   0x000000          Reset vector (handled by hardware)
- *   0x000004          General IVT
- *   0x000200          BOOTLOADER_FLASH  – bootloader code + .ramfunc image
- *   0x008000          APPLICATION_FLASH – application code (written by BL)
- *   0x055FFF          End of program flash
- *   0x800000          Configuration bits
+ * Flash page size: 2048 instructions = 0x800 program-address words.
+ * All region boundaries below are aligned to this page size.
  *
- *   0x000800          data RAM start  (dsPIC33CK has 48 KB of data RAM)
- *   0x006800          data RAM end    (0x800 + 0xC000 = 0x6800)
+ * Program flash map
+ * -----------------
+ *   0x000000 – 0x0001FF   Reset / IVT vectors   (hardware-reserved)
+ *   0x000200 – 0x005FFF   BOOTLOADER_FLASH       bootloader .text + .data image
+ *   0x006000 – 0x007FFF   FLASH_DRIVER_IMAGE     .ramfunc stored bytes  ← isolated here
+ *   0x008000 – 0x055FFF   APPLICATION_FLASH      application code (erased/written by BL)
+ *   0xF80000              Configuration bits
  *
- * .ramfunc section
- * ----------------
- *   LMA (load / stored in): inside BOOTLOADER_FLASH, right after .text
- *   VMA (run address):       RAMFUNC_RAM region in data RAM
+ * Why a dedicated FLASH_DRIVER_IMAGE region?
+ * ------------------------------------------
+ *   By pinning the flash-driver image to a fixed, page-aligned address range
+ *   (0x006000–0x007FFF) that is completely separate from the rest of the
+ *   bootloader code, you can:
+ *     • Extract exactly those Intel-HEX records with a simple address filter.
+ *     • Update the driver independently without relinking the whole bootloader.
+ *     • Erase just those 2 pages to reflash the driver in the field.
  *
- *   The linker records both addresses.  flash_driver_init_ramfunc() copies
- *   the bytes from flash (LMA) to RAM (VMA) before any ramfunc is called.
+ * Data RAM map
+ * ------------
+ *   0x000800 – 0x0087FF   data         bootloader stack / heap / bss (32 KB)
+ *   0x008800 – 0x008BFF   RAMFUNC_RAM  .ramfunc VMA – where the driver executes
+ *
+ * LMA vs VMA for .ramfunc
+ * -----------------------
+ *   LMA (Load Memory Address)  – where bytes are physically stored: FLASH_DRIVER_IMAGE
+ *   VMA (Virtual/Run Address)  – where the CPU fetches instructions at runtime: RAMFUNC_RAM
+ *   flash_driver_init_ramfunc() copies LMA → VMA at startup.
  *
  *   Symbols exported to C:
- *     _ramfunc_lma_start  – LMA of the section (copy source in flash)
- *     _ramfunc_vma_start  – VMA start in RAM   (copy destination)
- *     _ramfunc_vma_end    – VMA end   in RAM   (used to compute size)
+ *     _ramfunc_lma_start  – LMA in flash  (copy source)
+ *     _ramfunc_vma_start  – VMA in RAM    (copy destination)
+ *     _ramfunc_vma_end    – VMA end       (compute copy length)
  */
 
 OUTPUT_FORMAT("elf32-pic30-elf")
@@ -42,9 +53,22 @@ MEMORY
     /* Interrupt vector table – do not place code here */
     ivt                 (rx)  : ORIGIN = 0x000004, LENGTH = 0x0001F8
 
-    /* Bootloader: code + read-only data + .ramfunc image (LMA lives here) */
-    BOOTLOADER_FLASH    (rx)  : ORIGIN = 0x000200, LENGTH = 0x007E00
-    /*   0x000200 .. 0x007FFF  =  32 KB  */
+    /* Bootloader main code and read-only data.
+     * Ends at 0x005FFF, leaving the next 2 pages free for the driver image. */
+    BOOTLOADER_FLASH    (rx)  : ORIGIN = 0x000200, LENGTH = 0x005E00
+    /*   0x000200 .. 0x005FFF  =  ~23 KB  */
+
+    /* Flash driver image – .ramfunc section stored here (LMA).
+     *
+     *   • Fixed address: always 0x006000–0x007FFF regardless of bootloader size.
+     *   • Page-aligned:  starts and ends on a 0x800-word page boundary.
+     *   • 2 full pages (4096 instruction locations) – far more than needed
+     *     for the NVM driver; shrink to 1 page (LENGTH = 0x000800) if tight.
+     *   • To extract from a hex file:  filter records in range [0x006000, 0x007FFF].
+     *   • To update in the field:      erase pages at 0x006000 and 0x006800,
+     *                                  then reprogram this range only.          */
+    FLASH_DRIVER_IMAGE  (rx)  : ORIGIN = 0x006000, LENGTH = 0x002000
+    /*   0x006000 .. 0x007FFF  =  2 pages  */
 
     /* Application area – erased/written by the bootloader at runtime.
      * Not directly linked here; present so the linker can range-check
@@ -59,13 +83,13 @@ MEMORY
 
     /* General-purpose data RAM for the bootloader */
     data                (rw!x): ORIGIN = 0x000800, LENGTH = 0x008000
-    /*   48 KB total; first 32 KB reserved for bootloader stack+heap+bss  */
+    /*   32 KB for bootloader stack / heap / bss                          */
 
-    /* Dedicated region where .ramfunc section runs.
-     * Must be large enough to hold all functions marked __attribute__((section(".ramfunc")))
+    /* Dedicated region where .ramfunc section executes (VMA).
+     * Must be >= size of FLASH_DRIVER_IMAGE content actually used.
      * Adjust LENGTH if you add more RAM functions.                        */
     RAMFUNC_RAM         (rw!x): ORIGIN = 0x008800, LENGTH = 0x000400
-    /*   1 KB – should be plenty for the small NVM driver                 */
+    /*   1 KB  – enough for the NVM driver; increase if needed            */
 }
 
 /* =========================================================================
@@ -94,22 +118,24 @@ SECTIONS
     /* -----------------------------------------------------------------
      * .ramfunc section
      *
-     *   VMA  = RAMFUNC_RAM  (where CPU fetches instructions at runtime)
-     *   AT>  = BOOTLOADER_FLASH  (where the bytes are stored in flash)
+     *   VMA  = RAMFUNC_RAM        where the CPU fetches instructions at runtime
+     *   AT>  = FLASH_DRIVER_IMAGE where the bytes are physically stored in flash
      *
-     * The AT> directive makes the linker:
-     *   1. Assign VMA addresses from RAMFUNC_RAM  (for symbol resolution)
-     *   2. Place the actual bytes after .text in BOOTLOADER_FLASH  (LMA)
+     * Using a dedicated region (not AT>BOOTLOADER_FLASH) means:
+     *   - The driver image always starts at exactly 0x006000 in the hex file.
+     *   - It is independent of how large the bootloader .text is.
+     *   - You can extract or replace it with a fixed address-range filter.
      *
-     * LOADADDR(.ramfunc) gives the LMA so we can copy at startup.
+     * LOADADDR(.ramfunc) returns the LMA (0x006000) so the copy routine
+     * knows where to read from flash.
      * -------------------------------------------------------------- */
     .ramfunc :
     {
-        _ramfunc_vma_start = .;          /* VMA start (destination in RAM) */
+        _ramfunc_vma_start = .;          /* VMA start – run address in RAM  */
         *(.ramfunc .ramfunc.*)
         . = ALIGN(2);
-        _ramfunc_vma_end   = .;          /* VMA end                        */
-    } >RAMFUNC_RAM AT>BOOTLOADER_FLASH
+        _ramfunc_vma_end   = .;          /* VMA end                         */
+    } >RAMFUNC_RAM AT>FLASH_DRIVER_IMAGE
 
     /*
      * Export the LMA (load address in flash) so flash_driver_init_ramfunc()
