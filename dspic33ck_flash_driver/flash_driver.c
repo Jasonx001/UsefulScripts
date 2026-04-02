@@ -47,12 +47,26 @@
  *   _ramfunc_vma_start    →  __ramfunc_vma_start            =  __ramfunc_vma_start
  *   _ramfunc_vma_end      →  __ramfunc_vma_end              =  __ramfunc_vma_end
  *
- * These symbols must be defined OUTSIDE the .ramfunc section block in the GLD
- * (using ADDR/SIZEOF/LOADADDR), not inside it.  Symbols defined inside a
- * section block inherit the section's executable flag; the linker then refuses
- * to apply a WORD relocation to them when they are used as data pointers
- * (e.g. as the src/dst of memcpy), producing:
- *   "Cannot use relocation type WORD on a symbol in an executable section"
+ * XC16 linker rules for symbols that reference the .ramfunc VMA:
+ *
+ *   Rule 1 – Use double underscores in the GLD.
+ *     XC16 prepends '_' to C names, so _ramfunc_vma_start in C becomes
+ *     __ramfunc_vma_start in the object.  Single-underscore GLD symbols cause
+ *     "undefined reference".
+ *
+ *   Rule 2 – Do NOT define VMA symbols inside the .ramfunc section block.
+ *     Symbols defined inside a section block inherit SHF_EXECINSTR from the
+ *     section's code objects.  WORD relocation on executable-flagged symbols
+ *     is rejected: "Cannot use relocation type WORD on a symbol in an
+ *     executable section".
+ *
+ *   Rule 3 – Do NOT use ADDR(.ramfunc) outside the block either.
+ *     ADDR() still associates the result with the source section in XC16 ld,
+ *     preserving SHF_EXECINSTR and triggering the same WORD relocation error.
+ *
+ *   Correct approach (see .gld): sandwich .ramfunc between two (NOLOAD) marker
+ *   sections in RAMFUNC_RAM.  (NOLOAD) sections have no executable flag, so
+ *   symbols inside them are clean data-space symbols.
  * ---------------------------------------------------------------------- */
 extern uint8_t _ramfunc_lma_start;
 extern uint8_t _ramfunc_vma_start;

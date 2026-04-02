@@ -121,29 +121,36 @@ SECTIONS
      *   VMA  = RAMFUNC_RAM        where the CPU fetches instructions at runtime
      *   AT>  = FLASH_DRIVER_IMAGE where the bytes are physically stored in flash
      *
-     * Using a dedicated region (not AT>BOOTLOADER_FLASH) means:
-     *   - The driver image always starts at exactly 0x006000 in the hex file.
-     *   - It is independent of how large the bootloader .text is.
-     *   - You can extract or replace it with a fixed address-range filter.
+     * VMA boundary symbols must NOT be defined inside this section block or
+     * via ADDR() — both approaches cause XC16 to tag the symbol as belonging
+     * to an executable section, producing:
+     *   "Cannot use relocation type WORD on a symbol in an executable section"
      *
-     * LOADADDR(.ramfunc) returns the LMA (0x006000) so the copy routine
-     * knows where to read from flash.
+     * Solution: wrap the section with zero-size (NOLOAD) marker sections in
+     * RAMFUNC_RAM.  (NOLOAD) sections carry no SHF_EXECINSTR flag regardless
+     * of their neighbours, so symbols inside them are plain data-space symbols
+     * and accept WORD relocations from memcpy / pointer arithmetic.
      * -------------------------------------------------------------- */
+
+    /* Zero-size data marker BEFORE .ramfunc — captures VMA start. */
+    .ramfunc_vma_lo (NOLOAD) :
+    {
+        __ramfunc_vma_start = .;
+    } >RAMFUNC_RAM
+
     .ramfunc :
     {
         *(.ramfunc .ramfunc.*)
         . = ALIGN(2);
     } >RAMFUNC_RAM AT>FLASH_DRIVER_IMAGE
 
-    /*
-     * Define all three symbols OUTSIDE the section block using ADDR() /
-     * SIZEOF() / LOADADDR().  Symbols defined inside a section block inherit
-     * that section's executable flag, which prevents the linker from applying
-     * a plain WORD relocation (needed by memcpy in flash_driver_init_ramfunc).
-     * Symbols defined here are plain absolute values with no section tag.
-     */
-    __ramfunc_vma_start = ADDR(.ramfunc);
-    __ramfunc_vma_end   = ADDR(.ramfunc) + SIZEOF(.ramfunc);
+    /* Zero-size data marker AFTER .ramfunc — captures VMA end. */
+    .ramfunc_vma_hi (NOLOAD) :
+    {
+        __ramfunc_vma_end = .;
+    } >RAMFUNC_RAM
+
+    /* LMA in flash: defined outside any section → plain absolute symbol. */
     __ramfunc_lma_start = LOADADDR(.ramfunc);
 
     /* -----------------------------------------------------------------
