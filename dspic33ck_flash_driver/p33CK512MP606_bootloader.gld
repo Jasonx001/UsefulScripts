@@ -1,0 +1,165 @@
+/*
+ * p33CK512MP606_bootloader.gld
+ *
+ * Custom linker script for a dsPIC33CK512MP606 bootloader project.
+ *
+ * Memory map overview
+ * -------------------
+ *   0x000000          Reset vector (handled by hardware)
+ *   0x000004          General IVT
+ *   0x000200          BOOTLOADER_FLASH  – bootloader code + .ramfunc image
+ *   0x008000          APPLICATION_FLASH – application code (written by BL)
+ *   0x055FFF          End of program flash
+ *   0x800000          Configuration bits
+ *
+ *   0x000800          data RAM start  (dsPIC33CK has 48 KB of data RAM)
+ *   0x006800          data RAM end    (0x800 + 0xC000 = 0x6800)
+ *
+ * .ramfunc section
+ * ----------------
+ *   LMA (load / stored in): inside BOOTLOADER_FLASH, right after .text
+ *   VMA (run address):       RAMFUNC_RAM region in data RAM
+ *
+ *   The linker records both addresses.  flash_driver_init_ramfunc() copies
+ *   the bytes from flash (LMA) to RAM (VMA) before any ramfunc is called.
+ *
+ *   Symbols exported to C:
+ *     _ramfunc_lma_start  – LMA of the section (copy source in flash)
+ *     _ramfunc_vma_start  – VMA start in RAM   (copy destination)
+ *     _ramfunc_vma_end    – VMA end   in RAM   (used to compute size)
+ */
+
+OUTPUT_FORMAT("elf32-pic30-elf")
+OUTPUT_ARCH(pic30)
+
+/* =========================================================================
+ * Memory regions
+ * ====================================================================== */
+MEMORY
+{
+    /*--- Program flash -------------------------------------------------- */
+
+    /* Interrupt vector table – do not place code here */
+    ivt                 (rx)  : ORIGIN = 0x000004, LENGTH = 0x0001F8
+
+    /* Bootloader: code + read-only data + .ramfunc image (LMA lives here) */
+    BOOTLOADER_FLASH    (rx)  : ORIGIN = 0x000200, LENGTH = 0x007E00
+    /*   0x000200 .. 0x007FFF  =  32 KB  */
+
+    /* Application area – erased/written by the bootloader at runtime.
+     * Not directly linked here; present so the linker can range-check
+     * addresses used in flash_driver.c.                                  */
+    APPLICATION_FLASH   (rx)  : ORIGIN = 0x008000, LENGTH = 0x04E000
+    /*   0x008000 .. 0x055FFF  = 312 KB  */
+
+    /* Configuration words */
+    config_words        (r)   : ORIGIN = 0xF80000, LENGTH = 0x000010
+
+    /*--- Data RAM ------------------------------------------------------- */
+
+    /* General-purpose data RAM for the bootloader */
+    data                (rw!x): ORIGIN = 0x000800, LENGTH = 0x008000
+    /*   48 KB total; first 32 KB reserved for bootloader stack+heap+bss  */
+
+    /* Dedicated region where .ramfunc section runs.
+     * Must be large enough to hold all functions marked __attribute__((section(".ramfunc")))
+     * Adjust LENGTH if you add more RAM functions.                        */
+    RAMFUNC_RAM         (rw!x): ORIGIN = 0x008800, LENGTH = 0x000400
+    /*   1 KB – should be plenty for the small NVM driver                 */
+}
+
+/* =========================================================================
+ * Sections
+ * ====================================================================== */
+SECTIONS
+{
+    /* -----------------------------------------------------------------
+     * Interrupt vector table
+     * -------------------------------------------------------------- */
+    .ivt :
+    {
+        KEEP(*(.ivt))
+    } >ivt
+
+    /* -----------------------------------------------------------------
+     * Bootloader code and read-only data  (stored and run in flash)
+     * -------------------------------------------------------------- */
+    .text :
+    {
+        *(.text .text.*)
+        *(.rodata .rodata.*)
+        . = ALIGN(2);
+    } >BOOTLOADER_FLASH
+
+    /* -----------------------------------------------------------------
+     * .ramfunc section
+     *
+     *   VMA  = RAMFUNC_RAM  (where CPU fetches instructions at runtime)
+     *   AT>  = BOOTLOADER_FLASH  (where the bytes are stored in flash)
+     *
+     * The AT> directive makes the linker:
+     *   1. Assign VMA addresses from RAMFUNC_RAM  (for symbol resolution)
+     *   2. Place the actual bytes after .text in BOOTLOADER_FLASH  (LMA)
+     *
+     * LOADADDR(.ramfunc) gives the LMA so we can copy at startup.
+     * -------------------------------------------------------------- */
+    .ramfunc :
+    {
+        _ramfunc_vma_start = .;          /* VMA start (destination in RAM) */
+        *(.ramfunc .ramfunc.*)
+        . = ALIGN(2);
+        _ramfunc_vma_end   = .;          /* VMA end                        */
+    } >RAMFUNC_RAM AT>BOOTLOADER_FLASH
+
+    /*
+     * Export the LMA (load address in flash) so flash_driver_init_ramfunc()
+     * knows where to copy from.  LOADADDR returns the LMA of a section.
+     */
+    _ramfunc_lma_start = LOADADDR(.ramfunc);
+
+    /* -----------------------------------------------------------------
+     * Initialised data  (.data)
+     *
+     *   Stored in flash after .ramfunc image, copied to RAM by CRT0.
+     * -------------------------------------------------------------- */
+    .data :
+    {
+        _data_vma_start = .;
+        *(.data .data.*)
+        . = ALIGN(2);
+        _data_vma_end   = .;
+    } >data AT>BOOTLOADER_FLASH
+
+    _data_lma_start = LOADADDR(.data);
+
+    /* -----------------------------------------------------------------
+     * Zero-initialised data  (.bss)
+     * -------------------------------------------------------------- */
+    .bss (NOLOAD) :
+    {
+        _bss_start = .;
+        *(.bss .bss.*)
+        *(COMMON)
+        . = ALIGN(2);
+        _bss_end   = .;
+    } >data
+
+    /* -----------------------------------------------------------------
+     * Stack  (grows downward from top of data RAM)
+     * -------------------------------------------------------------- */
+    _stack_start = ORIGIN(data) + LENGTH(data) - 1;
+
+    /* -----------------------------------------------------------------
+     * Configuration bits
+     * -------------------------------------------------------------- */
+    .config_FSC         : { KEEP(*(.config_FSC))         } >config_words
+    .config_FDEVOPT     : { KEEP(*(.config_FDEVOPT))     } >config_words
+    .config_FALTREG     : { KEEP(*(.config_FALTREG))     } >config_words
+    .config_FBTSEQ      : { KEEP(*(.config_FBTSEQ))      } >config_words
+    .config_FICD        : { KEEP(*(.config_FICD))        } >config_words
+    .config_FPOR        : { KEEP(*(.config_FPOR))        } >config_words
+    .config_FWDT        : { KEEP(*(.config_FWDT))        } >config_words
+    .config_FOSC        : { KEEP(*(.config_FOSC))        } >config_words
+    .config_FOSCSEL     : { KEEP(*(.config_FOSCSEL))     } >config_words
+    .config_FGS         : { KEEP(*(.config_FGS))         } >config_words
+}
