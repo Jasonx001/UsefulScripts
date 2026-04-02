@@ -34,9 +34,18 @@
 
 /* -------------------------------------------------------------------------
  * Linker-provided symbols for the .ramfunc copy (see .gld)
- *   _ramfunc_lma_start  – load address in flash (source for copy)
- *   _ramfunc_vma_start  – run address  in RAM   (destination)
- *   _ramfunc_vma_end    – end of RAM region
+ *
+ * XC16 name-mangling rule:
+ *   The compiler prepends one '_' to every C identifier in the object file.
+ *   So  extern uint8_t _ramfunc_vma_start  here generates an object-level
+ *   reference to  __ramfunc_vma_start  (double underscore).
+ *   The GLD must therefore define  __ramfunc_vma_start  (double underscore)
+ *   so the linker can resolve the reference.
+ *
+ *   C name (one '_')      →  object-file symbol (two '_')   =  GLD symbol
+ *   _ramfunc_lma_start    →  __ramfunc_lma_start            =  __ramfunc_lma_start
+ *   _ramfunc_vma_start    →  __ramfunc_vma_start            =  __ramfunc_vma_start
+ *   _ramfunc_vma_end      →  __ramfunc_vma_end              =  __ramfunc_vma_end
  * ---------------------------------------------------------------------- */
 extern uint8_t _ramfunc_lma_start;
 extern uint8_t _ramfunc_vma_start;

@@ -131,17 +131,21 @@ SECTIONS
      * -------------------------------------------------------------- */
     .ramfunc :
     {
-        _ramfunc_vma_start = .;          /* VMA start – run address in RAM  */
+        /* Double underscores required: XC16 prepends one '_' to every C
+         * identifier, so  extern uint8_t _ramfunc_vma_start  in C becomes
+         * __ramfunc_vma_start in the object file.  Single-underscore symbols
+         * here would cause "undefined reference" link errors.               */
+        __ramfunc_vma_start = .;         /* VMA start – run address in RAM  */
         *(.ramfunc .ramfunc.*)
         . = ALIGN(2);
-        _ramfunc_vma_end   = .;          /* VMA end                         */
+        __ramfunc_vma_end   = .;         /* VMA end                         */
     } >RAMFUNC_RAM AT>FLASH_DRIVER_IMAGE
 
     /*
      * Export the LMA (load address in flash) so flash_driver_init_ramfunc()
      * knows where to copy from.  LOADADDR returns the LMA of a section.
      */
-    _ramfunc_lma_start = LOADADDR(.ramfunc);
+    __ramfunc_lma_start = LOADADDR(.ramfunc);
 
     /* -----------------------------------------------------------------
      * Initialised data  (.data)
