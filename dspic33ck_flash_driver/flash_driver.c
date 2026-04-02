@@ -46,6 +46,13 @@
  *   _ramfunc_lma_start    →  __ramfunc_lma_start            =  __ramfunc_lma_start
  *   _ramfunc_vma_start    →  __ramfunc_vma_start            =  __ramfunc_vma_start
  *   _ramfunc_vma_end      →  __ramfunc_vma_end              =  __ramfunc_vma_end
+ *
+ * These symbols must be defined OUTSIDE the .ramfunc section block in the GLD
+ * (using ADDR/SIZEOF/LOADADDR), not inside it.  Symbols defined inside a
+ * section block inherit the section's executable flag; the linker then refuses
+ * to apply a WORD relocation to them when they are used as data pointers
+ * (e.g. as the src/dst of memcpy), producing:
+ *   "Cannot use relocation type WORD on a symbol in an executable section"
  * ---------------------------------------------------------------------- */
 extern uint8_t _ramfunc_lma_start;
 extern uint8_t _ramfunc_vma_start;
