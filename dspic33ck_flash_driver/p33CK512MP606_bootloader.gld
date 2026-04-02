@@ -86,7 +86,37 @@ MEMORY
     /*   32 KB for bootloader stack / heap / bss                          */
 
     /* Dedicated region where .ramfunc section executes (VMA).
-     * Must be >= size of FLASH_DRIVER_IMAGE content actually used.
+     *
+     * ADDRESS OVERLAP WARNING
+     * -----------------------
+     * dsPIC33 has TWO separate address spaces: program (24-bit) and data (16-bit).
+     * The XC16 linker's memory-usage report does NOT distinguish them.  It
+     * reports a section under every memory region whose numeric address range
+     * contains the section's address, regardless of which space it is in.
+     *
+     * If RAMFUNC_RAM's numeric range overlaps with a program-memory region
+     * that has content placed in it (e.g. .const, .text), those program-space
+     * sections will be falsely reported under RAMFUNC_RAM in the link map,
+     * and the region's "used" counter will be inflated by them.
+     *
+     * Rule: place RAMFUNC_RAM at a data address ABOVE the highest program
+     * address used by any section the linker actively places (not just
+     * defined but actually filled).
+     *
+     * In this example:
+     *   - BOOTLOADER_FLASH  ends at 0x005FFF  (actively linked)
+     *   - FLASH_DRIVER_IMAGE ends at 0x007FFF  (actively linked, LMA of .ramfunc)
+     *   - APPLICATION_FLASH  starts at 0x008000 (NOT linked – written at runtime)
+     *
+     * RAMFUNC_RAM at 0x008800 is above 0x007FFF, so no actively-placed
+     * program section overlaps it.  APPLICATION_FLASH numerically overlaps
+     * (0x008000–0x055FFF) but the linker places no sections there, so no
+     * false reporting occurs.
+     *
+     * For your project: if the main code `program` region covers e.g.
+     * 0x3200–0xA800, place RAMFUNC_RAM above 0xA800 (e.g. 0xB400) so that
+     * .const and other program sections cannot fall inside its range.
+     *
      * Adjust LENGTH if you add more RAM functions.                        */
     RAMFUNC_RAM         (rw!x): ORIGIN = 0x008800, LENGTH = 0x000400
     /*   1 KB  – enough for the NVM driver; increase if needed            */
