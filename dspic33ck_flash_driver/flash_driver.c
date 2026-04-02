@@ -30,7 +30,7 @@
  */
 
 #include "flash_driver.h"
-#include <string.h>    /* memcpy */
+#include <libpic30.h>  /* _memcpy_p2d24, _prog_addressT */
 
 /* -------------------------------------------------------------------------
  * Linker-provided symbols for the .ramfunc copy (see .gld)
@@ -68,7 +68,13 @@
  *   sections in RAMFUNC_RAM.  (NOLOAD) sections have no executable flag, so
  *   symbols inside them are clean data-space symbols.
  * ---------------------------------------------------------------------- */
-extern uint8_t _ramfunc_lma_start;
+/* LMA lives in program space (separate address space from data RAM).
+ * space(prog) tells XC16 to use program-space addressing for this symbol,
+ * which allows __builtin_tbladdress() to return its correct 24-bit
+ * program address for use with _memcpy_p2d24().                          */
+extern __prog__ uint8_t _ramfunc_lma_start __attribute__((space(prog)));
+
+/* VMA symbols live in data RAM (placed by the (NOLOAD) marker sections). */
 extern uint8_t _ramfunc_vma_start;
 extern uint8_t _ramfunc_vma_end;
 
@@ -113,12 +119,36 @@ validate_address(uint32_t addr, uint32_t align_mask)
  * Public API implementation
  * ---------------------------------------------------------------------- */
 
-/* Called before main() – copies .ramfunc section from flash to RAM */
+/* Called before main() – copies .ramfunc section from flash to RAM.
+ *
+ * Why not memcpy()?
+ *   dsPIC33CK uses a modified Harvard architecture: program memory and data
+ *   RAM are completely separate address spaces.  memcpy() uses MOV instructions
+ *   which can only access data RAM; applying it to a program-space source reads
+ *   from a random data RAM location instead of flash.
+ *
+ * _memcpy_p2d24() (from <libpic30.h>):
+ *   Copies n BYTES from a 24-bit program-space address to data RAM.
+ *   Internally it uses TBLRD instructions which correctly read the 24-bit
+ *   (3-byte) instruction words out of flash, byte by byte.
+ *
+ * __builtin_tbladdress():
+ *   Returns the 24-bit program-space address of a space(prog) symbol as an
+ *   unsigned long, suitable for passing to _memcpy_p2d24() as the source.
+ *
+ * Size calculation:
+ *   &_ramfunc_vma_end - &_ramfunc_vma_start is the byte count in data RAM,
+ *   which equals the byte count of the same code in flash.
+ *   _memcpy_p2d24() expects this same byte count and handles the
+ *   program-memory word width internally.
+ */
 void flash_driver_init_ramfunc(void)
 {
-    size_t len = (size_t)(&_ramfunc_vma_end - &_ramfunc_vma_start);
+    size_t           len     = (size_t)(&_ramfunc_vma_end - &_ramfunc_vma_start);
+    _prog_addressT   lma     = __builtin_tbladdress(&_ramfunc_lma_start);
+
     if (len > 0u) {
-        memcpy(&_ramfunc_vma_start, &_ramfunc_lma_start, len);
+        _memcpy_p2d24(&_ramfunc_vma_start, lma, len);
     }
 }
 
