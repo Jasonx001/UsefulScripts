@@ -1,0 +1,121 @@
+/*
+ * p33CK512MP606_ram.gld
+ *
+ * Custom linker script for dsPIC33CK512MP606 with .ramfunc support.
+ *
+ * Start from the device default script:
+ *   <XC16_INSTALL>/support/dsPIC33C/gld/p33CK512MP606.gld
+ * and ADD the .ramfunc section shown below.
+ *
+ * How it works
+ * ============
+ *   A section can have two addresses:
+ *     LMA (Load Memory Address)  – where the bytes are stored in the hex file (Flash)
+ *     VMA (Virtual/Run Address)  – where the CPU reads them at runtime (RAM)
+ *
+ *   The linker stores the section bytes at LMA in Flash so they survive
+ *   power-off.  init_ram_functions() (in ram_demo.c) copies them from LMA
+ *   to VMA at startup.  After that copy, any call to a RAM_FUNC function
+ *   jumps into Data RAM.
+ *
+ * Usage in MPLAB X
+ * ================
+ *   Project Properties -> Conf -> XC16 Linker -> Additional options:
+ *     --script=p33CK512MP606_ram.gld
+ *   (or replace the default script entirely)
+ *
+ * Reference: XC16 Compiler User's Guide DS50002071, Chapter 15
+ *            "Using Linker Scripts"
+ */
+
+/* ---- include the stock Microchip device script first ------------------- */
+/* Uncomment the next line when you have XC16 installed:                    */
+/* INCLUDE p33CK512MP606.gld                                                */
+
+/*
+ * NOTE: The MEMORY and standard SECTIONS blocks below are abbreviated.
+ * In a real project, keep all the stock sections and ADD only the
+ * .ramfunc block shown further down.
+ */
+
+MEMORY
+{
+    /*
+     * Program Flash – word-addressed (each address = one 24-bit instruction).
+     * The phantom byte makes every second byte a '0', so byte-size is 2x word-size.
+     *
+     * 512 KB / 3 bytes-per-instruction * 2 (phantom) = 349,524 word addresses
+     * Range: 0x000200 .. 0x055FFF  (from datasheet DS70005349 Table 4-1)
+     */
+    program (xr)  : ORIGIN = 0x000200, LENGTH = 0x055E00
+
+    /*
+     * Data RAM – byte-addressed, 52 KB.
+     * Range: 0x000800 .. 0x00D7FF
+     */
+    data    (rw!x): ORIGIN = 0x000800, LENGTH = 0x00D000
+
+    /*
+     * Reserved area in Flash used as the LOAD address for .ramfunc.
+     * Place it at the END of flash so it does not interfere with code.
+     * Size must be >= the total size of all RAM_FUNC functions.
+     * Adjust ORIGIN / LENGTH as needed.
+     */
+    ramfunc_flash (xr) : ORIGIN = 0x054000, LENGTH = 0x001000  /* 4 KB reserved */
+}
+
+SECTIONS
+{
+    /* ---- Standard sections (abbreviated – keep stock content) ---------- */
+    .text :
+    {
+        *(.handle)
+        *(.libc) *(.libm) *(.libdsp)  /* keep math libs in flash */
+        *(.lib)
+        *(i.*)
+        *(.text .text.*)
+        *(.rodata .rodata.*)
+    } >program
+
+    .data :
+    {
+        *(.data .data.*)
+        *(.sdata .sdata.*)
+    } >data
+
+    .bss (NOLOAD) :
+    {
+        *(.bss .bss.*)
+        *(.sbss .sbss.*)
+        *(COMMON)
+    } >data
+
+    /* ---- RAM-function section ------------------------------------------ */
+    /*
+     * .ramfunc
+     *
+     *   VMA  = data RAM   -> functions run  from here
+     *   LMA  = Flash      -> bytes are stored here in the hex file
+     *
+     * The three exported symbols are used by init_ram_functions():
+     *   _ramfunc_load_begin  Flash LMA start (source for memcpy)
+     *   _ramfunc_begin       RAM   VMA start (destination for memcpy)
+     *   _ramfunc_end         RAM   VMA end   (copy length = end - begin)
+     */
+    .ramfunc :
+    {
+        . = ALIGN(4);
+        _ramfunc_begin = .;          /* RAM run address – start */
+        *(.ramfunc .ramfunc.*)
+        . = ALIGN(4);
+        _ramfunc_end = .;            /* RAM run address – end   */
+    } >data AT>ramfunc_flash         /* VMA in data RAM, LMA in Flash */
+
+    _ramfunc_load_begin = LOADADDR(.ramfunc);  /* Flash LMA start */
+
+    /* ---- Stack / heap (abbreviated) ------------------------------------ */
+    .stack (NOLOAD) :
+    {
+        . += 0x400;   /* 1 KB minimum stack */
+    } >data
+}
