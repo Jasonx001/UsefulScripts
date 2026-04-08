@@ -25,17 +25,18 @@ from pathlib import Path
 # =========================================================
 MPLAB_PROJECT_NAME = "PXEBIC_mplab.X"
 
-# All paths are relative to the current working directory (project root),
+# All paths are relative to the current working directory (project root = PXEBIC\),
 # which is where the .bat file runs from.
-APP_HEX_DIR   = Path(f"./{MPLAB_PROJECT_NAME}/dist")
-BOOT_HEX_DIR  = Path("./utils/post_build_hd20/BOOT_HEX")
-PY_HEX_MERGE  = Path("./utils/post_build_hd20/hex_merger.py")
-ZIP7          = Path(r"C:\Program Files\7-Zip\7z.exe")
+APP_HEX_DIR  = Path(f"./{MPLAB_PROJECT_NAME}/dist")
+PY_HEX_MERGE = Path("./utils/post_build_hd20/hex_merger.py")
+ZIP7         = Path(r"C:\Program Files\7-Zip\7z.exe")
 
-BM_ECOM   = BOOT_HEX_DIR / "BIC2HD20_BM_ECOM.hex"
-BM_IECOM  = BOOT_HEX_DIR / "BIC2HD20_BM_IECOM.hex"
-FBL_ECOM  = BOOT_HEX_DIR / "BIC2HD20_FBL_ECOM.hex"
-FBL_IECOM = BOOT_HEX_DIR / "BIC2HD20_FBL_IECOM.hex"
+# Boot hex files live one level above PXEBIC\ in their own MPLAB projects.
+# Layout: ..\BIC2HD20_BM\BIC2HD20_BM.X\dist\<CONF>\production\BIC2HD20_BM.X.production.hex
+BM_ECOM   = Path(r"..\BIC2HD20_BM\BIC2HD20_BM.X\dist\BIC2HD20_BM_ECOM\production\BIC2HD20_BM.X.production.hex")
+BM_IECOM  = Path(r"..\BIC2HD20_BM\BIC2HD20_BM.X\dist\BIC2HD20_BM_IECOM\production\BIC2HD20_BM.X.production.hex")
+FBL_ECOM  = Path(r"..\BIC2HD20_FBL\BIC2HD20_FBL.X\dist\BIC2HD20_FBL_ECOM\production\BIC2HD20_FBL.X.production.hex")
+FBL_IECOM = Path(r"..\BIC2HD20_FBL\BIC2HD20_FBL.X\dist\BIC2HD20_FBL_IECOM\production\BIC2HD20_FBL.X.production.hex")
 
 # Memory ranges passed to hex_merger.py
 PRG_START_RANGE  = "0x0000-0x0008"
