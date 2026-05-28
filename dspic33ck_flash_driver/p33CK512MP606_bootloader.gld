@@ -1,0 +1,231 @@
+/*
+ * p33CK512MP606_bootloader.gld
+ *
+ * Custom linker script for a dsPIC33CK512MP606 bootloader project.
+ *
+ * Flash page size: 2048 instructions = 0x800 program-address words.
+ * All region boundaries below are aligned to this page size.
+ *
+ * Program flash map
+ * -----------------
+ *   0x000000 – 0x0001FF   Reset / IVT vectors   (hardware-reserved)
+ *   0x000200 – 0x005FFF   BOOTLOADER_FLASH       bootloader .text + .data image
+ *   0x006000 – 0x007FFF   FLASH_DRIVER_IMAGE     .ramfunc stored bytes  ← isolated here
+ *   0x008000 – 0x055FFF   APPLICATION_FLASH      application code (erased/written by BL)
+ *   0xF80000              Configuration bits
+ *
+ * Why a dedicated FLASH_DRIVER_IMAGE region?
+ * ------------------------------------------
+ *   By pinning the flash-driver image to a fixed, page-aligned address range
+ *   (0x006000–0x007FFF) that is completely separate from the rest of the
+ *   bootloader code, you can:
+ *     • Extract exactly those Intel-HEX records with a simple address filter.
+ *     • Update the driver independently without relinking the whole bootloader.
+ *     • Erase just those 2 pages to reflash the driver in the field.
+ *
+ * Data RAM map
+ * ------------
+ *   0x000800 – 0x0087FF   data         bootloader stack / heap / bss (32 KB)
+ *   0x008800 – 0x008BFF   RAMFUNC_RAM  .ramfunc VMA – where the driver executes
+ *
+ * LMA vs VMA for .ramfunc
+ * -----------------------
+ *   LMA (Load Memory Address)  – where bytes are physically stored: FLASH_DRIVER_IMAGE
+ *   VMA (Virtual/Run Address)  – where the CPU fetches instructions at runtime: RAMFUNC_RAM
+ *   flash_driver_init_ramfunc() copies LMA → VMA at startup.
+ *
+ *   Symbols exported to C:
+ *     _ramfunc_lma_start  – LMA in flash  (copy source)
+ *     _ramfunc_vma_start  – VMA in RAM    (copy destination)
+ *     _ramfunc_vma_end    – VMA end       (compute copy length)
+ */
+
+OUTPUT_FORMAT("elf32-pic30-elf")
+OUTPUT_ARCH(pic30)
+
+/* =========================================================================
+ * Memory regions
+ * ====================================================================== */
+MEMORY
+{
+    /*--- Program flash -------------------------------------------------- */
+
+    /* Interrupt vector table – do not place code here */
+    ivt                 (rx)  : ORIGIN = 0x000004, LENGTH = 0x0001F8
+
+    /* Bootloader main code and read-only data.
+     * Ends at 0x005FFF, leaving the next 2 pages free for the driver image. */
+    BOOTLOADER_FLASH    (rx)  : ORIGIN = 0x000200, LENGTH = 0x005E00
+    /*   0x000200 .. 0x005FFF  =  ~23 KB  */
+
+    /* Flash driver image – .ramfunc section stored here (LMA).
+     *
+     *   • Fixed address: always 0x006000–0x007FFF regardless of bootloader size.
+     *   • Page-aligned:  starts and ends on a 0x800-word page boundary.
+     *   • 2 full pages (4096 instruction locations) – far more than needed
+     *     for the NVM driver; shrink to 1 page (LENGTH = 0x000800) if tight.
+     *   • To extract from a hex file:  filter records in range [0x006000, 0x007FFF].
+     *   • To update in the field:      erase pages at 0x006000 and 0x006800,
+     *                                  then reprogram this range only.          */
+    FLASH_DRIVER_IMAGE  (rx)  : ORIGIN = 0x006000, LENGTH = 0x002000
+    /*   0x006000 .. 0x007FFF  =  2 pages  */
+
+    /* Application area – erased/written by the bootloader at runtime.
+     * Not directly linked here; present so the linker can range-check
+     * addresses used in flash_driver.c.                                  */
+    APPLICATION_FLASH   (rx)  : ORIGIN = 0x008000, LENGTH = 0x04E000
+    /*   0x008000 .. 0x055FFF  = 312 KB  */
+
+    /* Configuration words */
+    config_words        (r)   : ORIGIN = 0xF80000, LENGTH = 0x000010
+
+    /*--- Data RAM ------------------------------------------------------- */
+
+    /* General-purpose data RAM for the bootloader */
+    data                (rw!x): ORIGIN = 0x000800, LENGTH = 0x008000
+    /*   32 KB for bootloader stack / heap / bss                          */
+
+    /* Dedicated region where .ramfunc section executes (VMA).
+     *
+     * ADDRESS OVERLAP WARNING
+     * -----------------------
+     * dsPIC33 has TWO separate address spaces: program (24-bit) and data (16-bit).
+     * The XC16 linker's memory-usage report does NOT distinguish them.  It
+     * reports a section under every memory region whose numeric address range
+     * contains the section's address, regardless of which space it is in.
+     *
+     * If RAMFUNC_RAM's numeric range overlaps with a program-memory region
+     * that has content placed in it (e.g. .const, .text), those program-space
+     * sections will be falsely reported under RAMFUNC_RAM in the link map,
+     * and the region's "used" counter will be inflated by them.
+     *
+     * Rule: place RAMFUNC_RAM at a data address ABOVE the highest program
+     * address used by any section the linker actively places (not just
+     * defined but actually filled).
+     *
+     * In this example:
+     *   - BOOTLOADER_FLASH  ends at 0x005FFF  (actively linked)
+     *   - FLASH_DRIVER_IMAGE ends at 0x007FFF  (actively linked, LMA of .ramfunc)
+     *   - APPLICATION_FLASH  starts at 0x008000 (NOT linked – written at runtime)
+     *
+     * RAMFUNC_RAM at 0x008800 is above 0x007FFF, so no actively-placed
+     * program section overlaps it.  APPLICATION_FLASH numerically overlaps
+     * (0x008000–0x055FFF) but the linker places no sections there, so no
+     * false reporting occurs.
+     *
+     * For your project: if the main code `program` region covers e.g.
+     * 0x3200–0xA800, place RAMFUNC_RAM above 0xA800 (e.g. 0xB400) so that
+     * .const and other program sections cannot fall inside its range.
+     *
+     * Adjust LENGTH if you add more RAM functions.                        */
+    RAMFUNC_RAM         (rw!x): ORIGIN = 0x008800, LENGTH = 0x000400
+    /*   1 KB  – enough for the NVM driver; increase if needed            */
+}
+
+/* =========================================================================
+ * Sections
+ * ====================================================================== */
+SECTIONS
+{
+    /* -----------------------------------------------------------------
+     * Interrupt vector table
+     * -------------------------------------------------------------- */
+    .ivt :
+    {
+        KEEP(*(.ivt))
+    } >ivt
+
+    /* -----------------------------------------------------------------
+     * Bootloader code and read-only data  (stored and run in flash)
+     * -------------------------------------------------------------- */
+    .text :
+    {
+        *(.text .text.*)
+        *(.rodata .rodata.*)
+        . = ALIGN(2);
+    } >BOOTLOADER_FLASH
+
+    /* -----------------------------------------------------------------
+     * .ramfunc section
+     *
+     *   VMA  = RAMFUNC_RAM        where the CPU fetches instructions at runtime
+     *   AT>  = FLASH_DRIVER_IMAGE where the bytes are physically stored in flash
+     *
+     * VMA boundary symbols must NOT be defined inside this section block or
+     * via ADDR() — both approaches cause XC16 to tag the symbol as belonging
+     * to an executable section, producing:
+     *   "Cannot use relocation type WORD on a symbol in an executable section"
+     *
+     * Solution: wrap the section with zero-size (NOLOAD) marker sections in
+     * RAMFUNC_RAM.  (NOLOAD) sections carry no SHF_EXECINSTR flag regardless
+     * of their neighbours, so symbols inside them are plain data-space symbols
+     * and accept WORD relocations from memcpy / pointer arithmetic.
+     * -------------------------------------------------------------- */
+
+    /* Zero-size data marker BEFORE .ramfunc — captures VMA start. */
+    .ramfunc_vma_lo (NOLOAD) :
+    {
+        __ramfunc_vma_start = .;
+    } >RAMFUNC_RAM
+
+    .ramfunc :
+    {
+        *(.ramfunc .ramfunc.*)
+        . = ALIGN(2);
+    } >RAMFUNC_RAM AT>FLASH_DRIVER_IMAGE
+
+    /* Zero-size data marker AFTER .ramfunc — captures VMA end. */
+    .ramfunc_vma_hi (NOLOAD) :
+    {
+        __ramfunc_vma_end = .;
+    } >RAMFUNC_RAM
+
+    /* LMA in flash: defined outside any section → plain absolute symbol. */
+    __ramfunc_lma_start = LOADADDR(.ramfunc);
+
+    /* -----------------------------------------------------------------
+     * Initialised data  (.data)
+     *
+     *   Stored in flash after .ramfunc image, copied to RAM by CRT0.
+     * -------------------------------------------------------------- */
+    .data :
+    {
+        _data_vma_start = .;
+        *(.data .data.*)
+        . = ALIGN(2);
+        _data_vma_end   = .;
+    } >data AT>BOOTLOADER_FLASH
+
+    _data_lma_start = LOADADDR(.data);
+
+    /* -----------------------------------------------------------------
+     * Zero-initialised data  (.bss)
+     * -------------------------------------------------------------- */
+    .bss (NOLOAD) :
+    {
+        _bss_start = .;
+        *(.bss .bss.*)
+        *(COMMON)
+        . = ALIGN(2);
+        _bss_end   = .;
+    } >data
+
+    /* -----------------------------------------------------------------
+     * Stack  (grows downward from top of data RAM)
+     * -------------------------------------------------------------- */
+    _stack_start = ORIGIN(data) + LENGTH(data) - 1;
+
+    /* -----------------------------------------------------------------
+     * Configuration bits
+     * -------------------------------------------------------------- */
+    .config_FSC         : { KEEP(*(.config_FSC))         } >config_words
+    .config_FDEVOPT     : { KEEP(*(.config_FDEVOPT))     } >config_words
+    .config_FALTREG     : { KEEP(*(.config_FALTREG))     } >config_words
+    .config_FBTSEQ      : { KEEP(*(.config_FBTSEQ))      } >config_words
+    .config_FICD        : { KEEP(*(.config_FICD))        } >config_words
+    .config_FPOR        : { KEEP(*(.config_FPOR))        } >config_words
+    .config_FWDT        : { KEEP(*(.config_FWDT))        } >config_words
+    .config_FOSC        : { KEEP(*(.config_FOSC))        } >config_words
+    .config_FOSCSEL     : { KEEP(*(.config_FOSCSEL))     } >config_words
+    .config_FGS         : { KEEP(*(.config_FGS))         } >config_words
+}
